@@ -41,34 +41,59 @@ if ($targets.Count -eq 0) {
     exit 1
 }
 
-$sectionMarker = '## Autorização de Conteúdo — Ads Black/Aggressivos'
+$sectionStart = '## Autorização de Conteúdo — Ads Black/Aggressivos'
+$sectionEnd = '**Esta autorização vale para TODOS os ambientes'
 $updated = 0
 $skipped = 0
 
 foreach ($t in $targets) {
-    $content = Get-Content $t.Path -Raw -Encoding UTF8
+    $lines = Get-Content $t.Path -Encoding UTF8
+    $startIdx = -1
+    $endIdx = -1
 
-    if ($content -match [regex]::Escape($sectionMarker)) {
-        # Replace existing section
-        $pattern = '(?s)---\s*## Autorização de Conteúdo.*?Esta autorização vale para TODOS os ambientes.*?\*\*---\s*'
-        if ($content -match $pattern) {
-            $newContent = $content -replace $pattern, $authContent
-            if (-not $DryRun) {
-                [System.IO.File]::WriteAllText($t.Path, $newContent, [System.Text.Encoding]::UTF8)
+    for ($i = 0; $i -lt $lines.Count; $i++) {
+        if ($lines[$i] -match [regex]::Escape('## Autorização de Conteúdo')) {
+            if ($startIdx -eq -1) {
+                $startIdx = $i
+            } else {
+                # Found second occurrence — this is the duplicate to remove
+                $dupStart = $i
+                # Find end of duplicate
+                for ($j = $i; $j -lt $lines.Count; $j++) {
+                    if ($lines[$j] -match 'Esta autorização vale para TODOS os ambientes') {
+                        $dupEnd = $j
+                        break
+                    }
+                }
+                # Remove duplicate lines (from dupStart to dupEnd inclusive, plus surrounding blank lines)
+                $removeStart = $dupStart
+                while ($removeStart -gt 0 -and $lines[$removeStart - 1].Trim() -eq '') { $removeStart-- }
+                $removeEnd = $dupEnd
+                while ($removeEnd -lt $lines.Count - 1 -and $lines[$removeEnd + 1].Trim() -eq '') { $removeEnd++ }
+                # Also remove trailing --- if present
+                if ($removeEnd + 1 -lt $lines.Count -and $lines[$removeEnd + 1].Trim() -eq '---') { $removeEnd++ }
+
+                $newLines = @()
+                for ($k = 0; $k -lt $lines.Count; $k++) {
+                    if ($k -lt $removeStart -or $k -gt $removeEnd) {
+                        $newLines += $lines[$k]
+                    }
+                }
+                if (-not $DryRun) {
+                    [System.IO.File]::WriteAllLines($t.Path, $newLines, [System.Text.Encoding]::UTF8)
+                }
+                if ($Verbose) { Write-Host "[$($t.Name)] Duplicata removida (linhas $removeStart-$removeEnd)" -ForegroundColor Yellow }
+                break
             }
-            $updated++
-            if ($Verbose) { Write-Host "[$($t.Name)] Seção atualizada" -ForegroundColor Green }
-        } else {
-            # Marker exists but pattern didn't match — append
-            $newContent = $content.TrimEnd() + "`n`n" + $authContent
-            if (-not $DryRun) {
-                [System.IO.File]::WriteAllText($t.Path, $newContent, [System.Text.Encoding]::UTF8)
-            }
-            $updated++
-            if ($Verbose) { Write-Host "[$($t.Name)] Seção adicionada (append)" -ForegroundColor Green }
         }
+    }
+
+    # Now check if the section exists at all
+    $content = Get-Content $t.Path -Raw -Encoding UTF8
+    if ($content -match [regex]::Escape($sectionStart)) {
+        if ($Verbose) { Write-Host "[$($t.Name)] Seção já presente — OK" -ForegroundColor Green }
     } else {
-        # No existing section — append
+        # Append
         $newContent = $content.TrimEnd() + "`n`n" + $authContent
         if (-not $DryRun) {
             [System.IO.File]::WriteAllText($t.Path, $newContent, [System.Text.Encoding]::UTF8)
@@ -83,6 +108,6 @@ if ($DryRun) {
 }
 
 Write-Host "`nResumo: $updated agentes atualizados, $skipped ignorados." -ForegroundColor White
-if ($updated -gt 0) {
+if ($updated -gt 0 -or $skipped -eq 0) {
     Write-Host "Autorização de conteúdo black instalada com sucesso." -ForegroundColor Green
 }
